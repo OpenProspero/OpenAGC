@@ -585,6 +585,42 @@ static int test_raster_indexed_draw(void)
     return 0;
 }
 
+static int test_raster_viewport_convention(void)
+{
+    openagc_pm4_ngg_program program;
+    openagc_raster_gpu_draw draw;
+    uint32_t context_table[OPENAGC_PM4_NGG_TABLE_WORDS];
+    uint32_t uconfig_table[OPENAGC_RASTER_UCONFIG_TABLE_WORDS];
+    uint32_t words[OPENAGC_RASTER_MAX_WORDS];
+    uint32_t count;
+
+    make_program(&program);
+    make_draw(&draw, &program, context_table, uconfig_table);
+
+    /* The console's own driver: scale +height/2 and +width/2, depth 0..1. */
+    draw.viewport_y_down = 1u;
+    count = openagc_raster_encode_draw(&draw, words, OPENAGC_RASTER_MAX_WORDS);
+    CHECK(count > 0u);
+    CHECK(ib_has_context_word(words, count, OPENAGC_GFX10_PA_CL_VPORT_XSCALE,
+                              0x40800000u) == 1u);
+    CHECK(ib_has_context_word(words, count, OPENAGC_GFX10_PA_CL_VPORT_YSCALE,
+                              0x40800000u) == 1u);
+    CHECK(ib_has_context_word(words, count, OPENAGC_GFX10_PA_CL_VPORT_ZSCALE,
+                              0x3f800000u) == 1u);
+    CHECK(ib_has_context_word(words, count, OPENAGC_GFX10_PA_CL_VPORT_ZOFFSET,
+                              0u) == 1u);
+
+    /* OpenGL: y scale is negative and the depth range is centred. */
+    draw.viewport_y_down = 0u;
+    count = openagc_raster_encode_draw(&draw, words, OPENAGC_RASTER_MAX_WORDS);
+    CHECK(count > 0u);
+    CHECK(ib_has_context_word(words, count, OPENAGC_GFX10_PA_CL_VPORT_YSCALE,
+                              0xc0800000u) == 1u);
+    CHECK(ib_has_context_word(words, count, OPENAGC_GFX10_PA_CL_VPORT_ZSCALE,
+                              0x3f000000u) == 1u);
+    return 0;
+}
+
 static int test_raster_refusals(void)
 {
     openagc_pm4_ngg_program program;
@@ -705,6 +741,7 @@ static int test_raster_init_macro(void)
     CHECK(draw.color_pitch_bytes == 0u && draw.color_bgra == 0u);
     CHECK(draw.viewport_x == 0u && draw.viewport_y == 0u);
     CHECK(draw.viewport_width == 0u && draw.viewport_height == 0u);
+    CHECK(draw.viewport_y_down == 0u);
     CHECK(draw.topology == 0u && draw.topology_write == 0u);
     CHECK(draw.vertex_count == 0u && draw.program == NULL);
     CHECK(draw.vertex_code_va == 0u && draw.fragment_code_va == 0u);
@@ -746,6 +783,7 @@ int main(void)
         test_raster_topology_forms() != 0 ||
         test_raster_native_ring_variant() != 0 ||
         test_raster_indexed_draw() != 0 ||
+        test_raster_viewport_convention() != 0 ||
         test_raster_explicit_bind_and_pass() != 0 ||
         test_raster_refusals() != 0 ||
         test_raster_init_macro() != 0 ||

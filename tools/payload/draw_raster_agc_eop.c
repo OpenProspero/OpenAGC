@@ -104,7 +104,7 @@ extern int sceKernelMapNamedDirectMemory(void **address, size_t len,
 #endif
 #define OPENAGC_DEADLINE_SECONDS 30
 
-#define OPENAGC_LOG_BYTES (OPENAGC_VIEW_WORDS * 9u + 2048u)
+#define OPENAGC_LOG_BYTES (OPENAGC_VIEW_WORDS * 9u + 3072u)
 
 #define OPENAGC_PROT_READ 0x01
 #define OPENAGC_PROT_WRITE 0x02
@@ -133,7 +133,7 @@ struct openagc_agc_description {
 #endif
 
 #ifndef OPENAGC_LOG_PATH
-#define OPENAGC_LOG_PATH "/data/prosperoai/openagc-ib-dump-draw-agc.log"
+#define OPENAGC_LOG_PATH "/data/prosperoai/openagc-ib-dump-draw-agc-rows.log"
 #endif
 static const char openagc_log_path[] = OPENAGC_LOG_PATH;
 
@@ -167,6 +167,115 @@ static int openagc_logf(const char *fmt, ...)
     return openagc_log_bytes(line, strlen(line));
 }
 
+static int openagc_write_report(int completed, uint64_t color_va,
+                                uint32_t pixels, uint32_t outside,
+                                uint32_t guard, uint32_t value,
+                                int wait_seconds, int match, uint32_t ib_words,
+                                uint32_t topology, uint32_t gs_out,
+                                uint32_t target_nonzero, uint32_t target_expected,
+                                uint32_t bbox_min_x, uint32_t bbox_min_y,
+                                uint32_t bbox_max_x, uint32_t bbox_max_y,
+                                uint32_t target_first, const uint32_t *target_rows,
+                                const uint32_t *baseline, const uint32_t *probe,
+                                const uint32_t *ngg, const uint32_t *window)
+{
+    char buffer[OPENAGC_LOG_BYTES];
+    size_t used = 0u;
+    uint32_t i;
+    int n;
+
+    n = snprintf(buffer, sizeof(buffer),
+                 "openagc-agc-report: color_va=%016llx submit=%u gate=%u ib=%u "
+                 "completed=%d pixels=%u outside=%u guard=%u value=%08x "
+                 "wait=%ds match=%d\n",
+                 (unsigned long long)color_va, (unsigned)OPENAGC_AGC_SUBMIT,
+                 (unsigned)OPENAGC_GATE_MASK, ib_words, completed, pixels,
+                 outside, guard, value, wait_seconds, match);
+    if (n < 0 || (size_t)n >= sizeof(buffer)) {
+        return -1;
+    }
+    used = (size_t)n;
+
+    n = snprintf(buffer + used, sizeof(buffer) - used,
+                 "openagc-agc-target: nonzero=%u expected=%u bbox=%u,%u..%u,%u "
+                 "first=%08x topology=%u gs_out=%u\n",
+                 target_nonzero, target_expected, bbox_min_x, bbox_min_y,
+                 bbox_max_x, bbox_max_y, target_first, topology, gs_out);
+    if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+        return -1;
+    }
+    used += (size_t)n;
+
+    n = snprintf(buffer + used, sizeof(buffer) - used, "openagc-agc-rows:");
+    if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+        return -1;
+    }
+    used += (size_t)n;
+    for (i = 0u; i < OPENAGC_COLOR_HEIGHT; ++i) {
+        n = snprintf(buffer + used, sizeof(buffer) - used, " %08x", target_rows[i]);
+        if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+            return -1;
+        }
+        used += (size_t)n;
+    }
+
+    n = snprintf(buffer + used, sizeof(buffer) - used, "\nopenagc-agc-state:");
+    if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+        return -1;
+    }
+    used += (size_t)n;
+    for (i = 0u; i < OPENAGC_GFX10_DRAW_BASELINE_COUNT; ++i) {
+        n = snprintf(buffer + used, sizeof(buffer) - used, " %08x", baseline[i]);
+        if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+            return -1;
+        }
+        used += (size_t)n;
+    }
+    n = snprintf(buffer + used, sizeof(buffer) - used, " |");
+    if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+        return -1;
+    }
+    used += (size_t)n;
+    for (i = 0u; i < OPENAGC_GFX10_DRAW_PROBE_COUNT; ++i) {
+        n = snprintf(buffer + used, sizeof(buffer) - used, " %08x", probe[i]);
+        if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+            return -1;
+        }
+        used += (size_t)n;
+    }
+    n = snprintf(buffer + used, sizeof(buffer) - used, " |");
+    if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+        return -1;
+    }
+    used += (size_t)n;
+    for (i = 0u; i < OPENAGC_PM4_NGG_PROBE_COUNT; ++i) {
+        n = snprintf(buffer + used, sizeof(buffer) - used, " %08x", ngg[i]);
+        if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+            return -1;
+        }
+        used += (size_t)n;
+    }
+
+    n = snprintf(buffer + used, sizeof(buffer) - used, "\nopenagc-agc-window:");
+    if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+        return -1;
+    }
+    used += (size_t)n;
+    for (i = 0u; i < OPENAGC_VIEW_WORDS; ++i) {
+        n = snprintf(buffer + used, sizeof(buffer) - used, " %08x", window[i]);
+        if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+            return -1;
+        }
+        used += (size_t)n;
+    }
+    if (used + 1u >= sizeof(buffer)) {
+        return -1;
+    }
+    buffer[used++] = '\n';
+    buffer[used] = '\0';
+    return openagc_log_bytes(buffer, used);
+}
+
 static int openagc_write_draw_dump(uint32_t target_nonzero,
                                    uint32_t target_expected, uint32_t bbox_min_x,
                                    uint32_t bbox_min_y, uint32_t bbox_max_x,
@@ -178,6 +287,7 @@ static int openagc_write_draw_dump(uint32_t target_nonzero,
                                    uint32_t word_count, uint32_t draw_topology,
                                    uint32_t draw_gs_out, const uint32_t *baseline,
                                    const uint32_t *probe, const uint32_t *ngg,
+                                   const uint32_t *target_rows,
                                    const uint32_t *window)
 {
     char buffer[OPENAGC_LOG_BYTES];
@@ -260,6 +370,18 @@ static int openagc_write_draw_dump(uint32_t target_nonzero,
     used += (size_t)n;
 
     n = snprintf(buffer + used, sizeof(buffer) - used,
+                 "openagc-raster-rows: %08x %08x %08x %08x %08x %08x %08x %08x "
+                 "%08x %08x %08x %08x %08x %08x %08x %08x\n",
+                 target_rows[0], target_rows[1], target_rows[2], target_rows[3],
+                 target_rows[4], target_rows[5], target_rows[6], target_rows[7],
+                 target_rows[8], target_rows[9], target_rows[10], target_rows[11],
+                 target_rows[12], target_rows[13], target_rows[14], target_rows[15]);
+    if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+        return -1;
+    }
+    used += (size_t)n;
+
+    n = snprintf(buffer + used, sizeof(buffer) - used,
                  "openagc-ib-dump: tag=%s fw=0x%x completed=%d words=%u\n",
                  OPENAGC_IB_DUMP_TAG_DRAW_RASTER, OPENAGC_IB_DUMP_FW940_ID,
                  completed, word_count);
@@ -322,6 +444,7 @@ int main(void)
     uint32_t target_min_y = 0u;
     uint32_t target_max_y = 0u;
     uint32_t target_first = 0u;
+    uint32_t target_rows[OPENAGC_COLOR_HEIGHT];
     uint32_t outside = 0u;
     uint32_t guard = 0u;
     uint32_t value = 0u;
@@ -444,6 +567,7 @@ int main(void)
     draw.viewport_y = OPENAGC_VIEW_Y;
     draw.viewport_width = OPENAGC_VIEW_W;
     draw.viewport_height = OPENAGC_VIEW_H;
+    draw.viewport_y_down = 1u;
     /* smoke.tri.vert covers the viewport with one triangle: three
      * vertices, rasterized as a strip (VGT_GS_OUT_PRIM_TYPE 2). */
 #if OPENAGC_POINT_DRAW
@@ -646,10 +770,23 @@ int main(void)
             if (i / OPENAGC_COLOR_WIDTH > target_max_y) target_max_y = i / OPENAGC_COLOR_WIDTH;
         }
         target_first = first_value;
+        for (i = 0u; i < OPENAGC_COLOR_HEIGHT; ++i) {
+            uint32_t mask = 0u;
+            uint32_t x;
+
+            for (x = 0u; x < OPENAGC_COLOR_WIDTH; ++x) {
+                if (target[i * OPENAGC_COLOR_WIDTH + x] != 0u) {
+                    mask |= 1u << x;
+                }
+            }
+            target_rows[i] = mask;
+        }
     }
 
-    match = (completed && pixels != 0u && outside == 0u && guard == 0u &&
-             value == OPENAGC_PM4_SMOKE_FRAG_PIXEL_RGBA8)
+    /* Acceptance is what the target holds; the EOP marker is reported beside
+     * it because the AGC path does not deliver it. */
+    match = (target_nonzero != 0u && target_expected == target_nonzero &&
+             outside == 0u && guard == 0u)
                 ? 1
                 : 0;
     for (i = 0u; i < OPENAGC_VIEW_WORDS; ++i) {
@@ -684,18 +821,36 @@ int main(void)
             if (i / OPENAGC_COLOR_WIDTH < min_y) min_y = i / OPENAGC_COLOR_WIDTH;
             if (i / OPENAGC_COLOR_WIDTH > max_y) max_y = i / OPENAGC_COLOR_WIDTH;
         }
-        (void)openagc_logf("openagc-draw-raster-target: nonzero=%u expected=%u "
-                           "bbox=%u,%u..%u,%u first=%08x\n",
-                           nonzero, expected, min_x, min_y, max_x, max_y,
-                           first_value);
+        target_first = first_value;
+        for (i = 0u; i < OPENAGC_COLOR_HEIGHT; ++i) {
+            uint32_t mask = 0u;
+            uint32_t x;
+
+            for (x = 0u; x < OPENAGC_COLOR_WIDTH; ++x) {
+                if (target[i * OPENAGC_COLOR_WIDTH + x] != 0u) {
+                    mask |= 1u << x;
+                }
+            }
+            target_rows[i] = mask;
+        }
     }
 
-    if (openagc_write_draw_dump(target_nonzero, target_expected, target_min_x,
-                                target_min_y, target_max_x, target_max_y,
-                                target_first, completed, color_va, pixels, outside, guard,
-                                value, openagc_elapsed_seconds(&start), match,
-                                OPENAGC_VIEW_WORDS, draw.topology, gs_out,
-                                baseline, probe, ngg, window) != 0) {
+    /* Acceptance is what the target holds; the EOP marker is reported beside
+     * it because the AGC path does not deliver it. */
+    match = (target_nonzero != 0u && target_expected == target_nonzero &&
+             outside == 0u && guard == 0u)
+                ? 1
+                : 0;
+    if (pixels != 0u && value != OPENAGC_PM4_SMOKE_FRAG_PIXEL_RGBA8) {
+        match = 0;
+    }
+
+    if (openagc_write_report(
+            completed, color_va, pixels, outside, guard, value,
+            openagc_elapsed_seconds(&start), match, word_count, draw.topology,
+            gs_out, target_nonzero, target_expected, target_min_x, target_min_y,
+            target_max_x, target_max_y, target_first, target_rows, baseline,
+            probe, ngg, window) != 0) {
         return 1;
     }
     return match ? 0 : 1;

@@ -787,6 +787,24 @@ static inline uint32_t openagc_gfx10_float_bits(float value)
     return bits.u;
 }
 
+/* The same sequence with the y-down convention the console's own driver
+ * programs: clip y = -1 lands on the target's first row, so a viewport
+ * rectangle maps to itself rather than to its mirror. */
+static inline void openagc_gfx10_viewport_vulkan(uint32_t x, uint32_t y,
+                                                uint32_t width, uint32_t height,
+                                                uint32_t *values)
+{
+    float half_width = (float)width * 0.5f;
+    float half_height = (float)height * 0.5f;
+
+    values[0] = openagc_gfx10_float_bits(half_width);
+    values[1] = openagc_gfx10_float_bits((float)x + half_width);
+    values[2] = openagc_gfx10_float_bits(half_height);
+    values[3] = openagc_gfx10_float_bits((float)y + half_height);
+    values[4] = openagc_gfx10_float_bits(1.0f);
+    values[5] = openagc_gfx10_float_bits(0.0f);
+}
+
 static inline void openagc_gfx10_viewport_gl(uint32_t x, uint32_t y,
                                              uint32_t width, uint32_t height,
                                              uint32_t out[6])

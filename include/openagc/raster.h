@@ -112,6 +112,9 @@ typedef struct openagc_raster_gpu_draw {
     uint32_t viewport_y;
     uint32_t viewport_width;
     uint32_t viewport_height;
+    /* 0 flips y inside the viewport rectangle (OpenGL); 1 is the y-down
+     * convention the console's own driver programs (Vulkan). */
+    uint32_t viewport_y_down;
     openagc_raster_topology topology;
     openagc_raster_topology_write topology_write;
     uint32_t vertex_count;
@@ -152,7 +155,7 @@ typedef struct openagc_raster_gpu_draw {
 
 #define OPENAGC_RASTER_GPU_DRAW_INIT \
     { (uint32_t)sizeof(openagc_raster_gpu_draw), OPENAGC_RASTER_API_VERSION, \
-      0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, \
+      0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, \
       (const openagc_pm4_ngg_program *)0, 0u, 0u, 0u, 0u, 0u, 0u, \
       (uint32_t *)0, 0u, (uint32_t *)0, (const uint32_t *)0, \
       (const uint32_t *)0, 0u, (uint32_t)OPENAGC_RASTER_GATE_ALL, 1u, 0u, 0u }
@@ -495,9 +498,15 @@ static inline uint32_t openagc_raster_encode_draw(const openagc_raster_gpu_draw 
     cursor += openagc_pm4_encode_psbc_context_pairs(
         state_offsets, state_values, OPENAGC_PM4_DRAW_POINT_STATE_COUNT,
         words + cursor);
-    openagc_gfx10_viewport_gl(draw->viewport_x, draw->viewport_y,
-                              draw->viewport_width, draw->viewport_height,
-                              viewport);
+    if (draw->viewport_y_down != 0u) {
+        openagc_gfx10_viewport_vulkan(draw->viewport_x, draw->viewport_y,
+                                      draw->viewport_width, draw->viewport_height,
+                                      viewport);
+    } else {
+        openagc_gfx10_viewport_gl(draw->viewport_x, draw->viewport_y,
+                                  draw->viewport_width, draw->viewport_height,
+                                  viewport);
+    }
     openagc_pm4_encode_set_context_reg(OPENAGC_GFX10_PA_CL_VPORT_XSCALE, 6u,
                                        viewport, words + cursor);
     cursor += OPENAGC_PM4_SET_CONTEXT_WORDS(6u);

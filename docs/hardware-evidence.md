@@ -1971,6 +1971,42 @@ instruments for the next run, not reasons to claim qualification:
 the PS5 policy still refuses `OPENAGC_PS5_CAP_DRAW` until a run reports the
 drawn window, `outside=0` and a fired completion.
 
+## Step AP: the AGC path's placement anomaly is the colour-buffer layout
+
+The target now reports its own pixel map, so a placement question is settled
+with data rather than inference. Through the AGC path the draw writes 64
+dwords, every one the pinned fragment shader's `0xff0040ff`, and the row map
+shows them as eight **full-width rows spaced two apart**:
+
+```
+openagc-agc-target: nonzero=64 expected=64 bbox=8,16..15,30 first=ff0040ff
+openagc-agc-rows: rows 16,18,20,22,24,26,28,30 = 0000ff00, every other row empty
+```
+
+Raster rows 8..15 land at memory rows 2*y, which is a colour-buffer surface
+layout, not a viewport convention: the target's addressing is not the
+host-linear one the nine-word bind composes. Two readings fit and one probe
+separates them - either `CB_COLOR0_ATTRIB3`'s `COLOR_SW_MODE` write does not
+take in the AGC driver's context (its own tiled surface state surviving our
+SET_CONTEXT packet while `CB_COLOR0_BASE` demonstrably takes, since the
+words land in this payload's own arena), or the AGC path resolves the
+surface through its own target state. The next run therefore reads the nine
+colour-bind registers back before the draw, exactly as Step AB did on the
+raw path, and the same run also tries the bind as the last write before
+`DRAW_INDEX_AUTO`.
+
+The second anomaly is unchanged: `completed=0` with `pixels` in memory, so
+the shared EOP trailer is not delivered through this submission path. The
+payload's acceptance is now the target's own contents
+(`nonzero`/`expected`/`outside`/`guard`) with the marker reported beside it,
+and it stays **0** for the mismatch above rather than for the marker.
+
+`OPENAGC_RASTER_GPU_QUALIFIED` stays **0**, `gpu_executable` stays 0 and the
+PS5 policy still refuses `OPENAGC_PS5_CAP_DRAW`. What is newly owned is the
+pixel itself: 64 fragments of the pinned pixel shader's colour, produced by
+the shared encoder's IB on FW9.40, with the submission path as the only
+changed variable.
+
 ## What the two public PS5 drivers do that this submission does not
 
 Reviewed on 2026-09-26 against PS5_Vulkan (`mihawk-99/PS5_Vulkan`, `main`:
