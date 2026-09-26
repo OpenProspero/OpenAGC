@@ -8,9 +8,8 @@ shared OpenAGC backend.
 
 Become a real PS5 GPU/display driver: qualified firmware submit,
 executable pipelines, draws, and presentation — with host-testable
-VK/GL frontends on the same core. Current gaps (compiler gate, missing
-CB/DRAW evidence, presentation) are tracked stages, not the product
-identity.
+VK/GL frontends on the same core. The compiler gate and presentation
+are tracked stages, not the product identity.
 
 ## Current status (honest)
 
@@ -18,15 +17,13 @@ identity.
 | --- | --- |
 | Memory, buffers, copy queues, fences | Host simulation with explicit errors |
 | Images / clears | Host-linear RGBA8/BGRA8; CPU clear fills; WRITE_DATA tiling ≤32×8 |
-| Compute (narrow) | Console-proven `store_const` and `store_span` (1–8 lanes) via host CPU path |
+| Compute (narrow) | Console-proven `store_const` and `store_span` (1–8 lanes); the host CPU path stays the fallback |
 | Shader intake | Unverified fixtures **and** pin-checked `OPENGNM_PSBC` envelopes (`psbc_envelope=1`) |
-| Pipelines | Structural plans; shared host PSBC and AGC linker-register snapshots (no DRAW) |
-| Color-buffer bind words | Host-composed nine-register linear RGBA8 bind (Step AB), console round-trip proven for encode/record only |
-| Vulkan / OpenGL | Shared frontend core; equivalent work lands on the same backend bytes |
-| GPU rasterizer | `openagc_raster_encode_draw` (shared): composes the AGC-shaped draw IB — scalar state, context/uconfig tables, ES/PS program, color bind, one draw. `gpu_rasterization=1` after the Step AQ console pixel; the frontends still record plans, and the host CPU paths (clears, store-const compute) remain the fallback |
-| Attribute-less draws | Bind + draw recorded; still `NOT_READY` (no CB/DRAW / no `gpu_executable`) |
-| First console DRAW | **Proven (Step AQ)**: the AGC-submitted raster draw writes exactly the pinned pixel shader's colour into the caller's target - 64 pixels, the viewport rectangle, empty guard. Earlier steps: the AGC-shaped IB retires on FW9.40 but writes no pixel (Steps AE-AH: either colour bind, either draw initiator). With viewport transform on, the NGG draw stops retiring (Steps AJ-AM). Step AN corrected the `VGT_ESGS_RING_ITEMSIZE` register address, wrote and read its captured value 1, and used `CB_NORMAL`; it still timed out with zero pixels. A later source audit found that Steps AF and AN left the optional fragment-gate mask unset; the corrected payload has only offline validation. The legacy draw retires without a pixel while its topology readback stays zero. |
-| Draws / general dispatch | Refused (`NOT_READY` from compiler gate) |
+| Pipelines | Structural plans; shared host PSBC and AGC linker-register snapshots |
+| Color-buffer bind | Nine-register linear RGBA8 bind (Step AB) and the public capture's 16-record set, both console round-trip proven |
+| GPU rasterizer | `include/openagc/raster.h` composes one draw IB: scalar state, context/uconfig tables, ES/PS register program, colour bind, `DRAW_INDEX_AUTO` or `DRAW_INDEX_2`, EOP trailer, optional gate blocks. The shared core's capability reports `gpu_rasterization=1`, qualified by the Step AQ console pixel |
+| First console DRAW | **Proven (Step AQ)**: submitted through the console's own AGC driver, the draw writes 64 dwords that are all the pinned pixel shader's `0xff0040ff`, exactly inside the viewport rectangle, with an empty guard scan and the nine colour-bind registers reading back as composed. The raw `0xC0108102` ioctl path has never produced a fragment; the shared EOP marker is not delivered on the AGC path, so completion reads the target |
+| Draws through the frontends | Still `NOT_READY`: `vkCmdDraw`/`glDrawArrays` are not yet wired onto the encoder. The CPU paths (clears, store-const compute) are the fallback |
 | Presentation / swapchain | Native GPU swapchain refused; experimental CPU VideoOut presenter added for QuickJS |
 | `compiler_verified` / `gpu_executable` | Always **0** on accepted plans today |
 
@@ -35,8 +32,8 @@ identity.
 | Area | `OpenAGC::ps5_policy` |
 | --- | --- |
 | Same public symbols | Every public symbol is defined; host entry points stay fail-closed |
-| Qualification record | `openagc_ps5_policy_qualification` / `openagc_ps5_policy_require` state what the one observed firmware (`0x9400008`) qualified: copy+EOP, WRITE_DATA fills, compute stores, register programs, CB readback, IB dumps, the NGG program |
-| Draws | `OPENAGC_PS5_CAP_DRAW` qualified for `0x9400008`: the AGC-submitted raster draw writes the pinned shader's colour (the shared EOP marker is not delivered on that path, so completion reads the target) |
+| Qualification record | `openagc_ps5_policy_qualification` / `openagc_ps5_policy_require` state what the one observed firmware (`0x9400008`) qualified: copy+EOP, WRITE_DATA fills, compute stores, register programs, CB readback, IB dumps, the NGG program, and the draw |
+| Draws | `OPENAGC_PS5_CAP_DRAW` qualified for `0x9400008` by Step AQ, with the marker caveat written into the header |
 | Full host GPU library | Must **not** be linked into a PS5 image; the command recorder is built separately for the VideoOut presenter |
 
 An unknown firmware identity is not qualified: the table answers
@@ -44,44 +41,63 @@ An unknown firmware identity is not qualified: the table answers
 `UNSUPPORTED_OPERATION`. Firmware fields in descriptors are diagnostic
 hints, not authorization. The SDK QuickJS host uses
 `openagc_ps5_videoout.c` to draw the recorder's frames on the CPU and submit
-them to native VideoOut. This path has offline tests but awaits console display
-confirmation. GPU draw execution remains explicitly gated.
+them to native VideoOut. This path has offline tests but awaits console
+display confirmation.
 
 ## Stage gates (short)
 
 See [docs/roadmap.md](docs/roadmap.md) for the full staged plan.
 
-1. **Stages 1–4 (host)** — shared frontend core, VK/GL subsets, refuse unsupported ops. Done on host.
-2. **Stage 5** — still gated:
-   - **Compiler / executable shaders**: pin-checked PSBC envelopes may be
-     intaken as structural (`psbc_envelope=1`); host register programs
-     include context, shader, and vertex linkage pairs; `require_compiler`
-     still returns `NOT_READY`; nothing sets `gpu_executable`.
-   - **Draw / CB/DB PM4**: a nine-register linear color bind and NGG draw
-     complete on FW9.40, but no fragment writes a pixel. Linker output,
-     target defaults, and the native packet path still need comparison.
+1. **Stages 1–4 (host)** — shared frontend core, VK/GL subsets, refuse
+   unsupported ops. Done on host.
+2. **Stage 5 — one of two gates closed.**
+   - **Draw and colour bind**: closed on console. The shared encoder's draw
+     writes the pinned pixel shader's colour into the caller's target when
+     it is submitted through the AGC driver (`sceAgcDriverSubmitDcb` plus
+     `sceAgcSuspendPoint`); rasterization is qualified.
+   - **Compiler / executable shaders**: still gated. Pin-checked PSBC
+     envelopes are intaken as structural (`psbc_envelope=1`),
+     `require_compiler` returns `NOT_READY`, and nothing sets
+     `gpu_executable`.
+   - **Remaining work**: wire `vkCmdDraw` and `glDrawArrays` onto the
+     shared encoder with the host CPU paths as the fallback.
 3. **Stages 6–7** — native tiling / coherency and presentation: refused
    until separate evidence.
 
-## Console evidence (FW9.40, host-aligned only)
+## Console evidence (FW9.40)
 
-Separate SDK payloads on console proved, among other steps:
+Sanitized results only; raw captures stay off-repository. Steps A–N proved
+the copy, WRITE_DATA and compute vehicles; the raster campaign is:
 
-- DMA + EOP copy (`pm4_fw940.h`, 31 dwords)
-- WRITE_DATA fills through MAX_ROWS / MAX_COLS grid (Steps D–H, M, N)
-- Compute `store_const` and `store_span` chains through SPAN_MAX (I–L)
+- **AE–AH**: the AGC-shaped IB submits and retires with every program
+  register readable, and writes no pixel — with either colour bind, either
+  draw initiator, and the generic scissor and depth range written.
+- **AI–AM**: with `PA_CL_VTE_CNTL` set the draw reaches fragment generation
+  and stops retiring on the raw path; the legacy path never assembles
+  because `VGT_PRIMITIVE_TYPE` never takes.
+- **AO–AQ**: submitted through the AGC driver instead, the same words
+  rasterize. The colour surface's hardware row stride is 256 bytes where a
+  packed 32-pixel row is 128, which is what made the first runs look like a
+  placement anomaly; with that understood the acceptance is exact.
 
-The host library encodes aligned PM4 snapshots and simulates on CPU; it
-**never** submits those words to a console from this tree until a
-reviewed, evidence-backed path exists. Draw/render packets remain
-unavailable.
+The shared EOP marker is not delivered on the AGC submission path. Details,
+limits and the per-step artifacts: [docs/hardware-evidence.md](docs/hardware-evidence.md).
 
 ## Build
 
 ```text
 cmake -S . -B build
-cmake --build build --config Debug
-ctest --test-dir build --build-config Debug --output-on-failure
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+Extra checks the stages expect:
+
+```text
+cmake -S . -B build-asan -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+cmake --build build-asan && ctest --test-dir build-asan
+cmake -S . -B build-policy -DOPENAGC_PS5_POLICY_ONLY=ON && cmake --build build-policy
+python3 tools/check_host_invariants.py
 ```
 
 Headers (include as `<openagc/….h>`):
@@ -107,6 +123,16 @@ Link `OpenAGC::openagc` on the host via `add_subdirectory`. For PS5
 policy-only builds, use `-DOPENAGC_PS5_POLICY_ONLY=ON` and link only
 `OpenAGC::ps5_policy`. Recipe notes: [docs/architecture.md](docs/architecture.md).
 
+## Console payloads
+
+`tools/payload/build.sh <source.c> <out.elf>` builds an evidence payload with
+the payload SDK (extra defines through `PAYLOAD_CFLAGS`), `validate_elf.py`
+runs after every link, and `deploy.py` performs one validated push and reads
+the log back. Payloads that stall write their log only after their deadline,
+so fetch with `--wait 45`; and give each payload its own log path, because a
+later payload overwrites the previous file. Compute and copy payloads submit
+through the raw ioctl; the raster payloads submit through the AGC driver.
+
 ## Shader / PSBC (host)
 
 - Fixtures: `OPENAGC_SHADER_COMPILER_UNVERIFIED_FIXTURE` (structural only).
@@ -127,7 +153,6 @@ policy-only builds, use `-DOPENAGC_PS5_POLICY_ONLY=ON` and link only
   register program + EOP into the write snapshot (still
   `gpu_submitted=0`). After `bind_psbc_code`, VK queue submit / GL
   `bind_program` record the Step-U-shaped IB (69 + EOP = 93 dwords).
-  No DRAW packets.
 - Attribute-less plans (`vertex_input_mask == 0`) draw without a VBO;
   both frontends still stop at `NOT_READY`.
 - After `bind_psbc_code`, both host frontends can intake the 34 context
@@ -150,6 +175,14 @@ Vulkan and OpenGL share `frontend.h`: one staging/copy/transition path,
 native→backend translation, and explicit refuse for unsupported formats
 and layouts. Equivalence: `tests/test_openagc_equivalence.c` (including
 WRITE_DATA grid clears, depth clears, and PSBC register snapshots).
+
+The shared core reports `rasterization` from the rasterizer's qualification
+pin and `gpu_execution=0`. The Vulkan and OpenGL capability structs
+(`vulkan.h`, `opengl.h`) are still their own: one physical device with a
+transfer queue family, `gpu_execution=0`, `presentation=0`, and no
+rasterization field yet, which is part of the wiring left in stage 5.
+Neither frontend submits a draw — that wiring, with the host CPU paths as
+fallback, is what remains.
 
 Narrow compute exception on host only: `host_store_const` /
 `host_store_span` with groups `1,1,1` (console-proven blobs), without
