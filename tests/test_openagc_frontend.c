@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 OpenProspero */
 #include "openagc/frontend.h"
+#include "openagc/raster.h"
 #include "openagc/shader.h"
 #include "openagc/store_const_code.h"
 #include "openagc/store_span_code.h"
@@ -373,7 +374,8 @@ static int test_device_capabilities_and_lifetime(void)
     caps.struct_size++;
     EXPECT(openagc_frontend_device_get_capabilities(frontend, &caps), OPENAGC_OK);
     CHECK(caps.supported_kind_mask == 3u && caps.host_translation == 1u);
-    CHECK(caps.gpu_execution == 0u && caps.rasterization == 0u);
+    CHECK(caps.gpu_execution == 0u);
+    CHECK(caps.rasterization == OPENAGC_RASTER_GPU_QUALIFIED);
     CHECK(caps.presentation == 0u);
     CHECK(caps.supported_format_mask == 7u && caps.supported_usage_mask == 11u);
     CHECK(caps.max_width == 4096u && caps.max_height == 4096u);

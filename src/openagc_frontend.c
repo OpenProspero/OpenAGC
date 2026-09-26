@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* Copyright (C) 2026 OpenProspero */
 #include "openagc/frontend.h"
+#include "openagc/raster.h"
 #include "openagc/psbc_metadata.h"
 #include "openagc/shader.h"
 #include "openagc/pm4_compute_fw940.h"
@@ -919,7 +920,7 @@ openagc_result openagc_frontend_device_get_capabilities(
                                         (1u << (OPENAGC_FRONTEND_OPENGL - 1u));
     capabilities->host_translation = 1u;
     capabilities->gpu_execution = 0u;
-    capabilities->rasterization = 0u;
+    capabilities->rasterization = OPENAGC_RASTER_GPU_QUALIFIED;
     capabilities->presentation = 0u;
     capabilities->supported_format_mask = graphics.supported_format_mask;
     capabilities->supported_usage_mask = graphics.supported_usage_mask;
