@@ -2007,6 +2007,52 @@ pixel itself: 64 fragments of the pinned pixel shader's colour, produced by
 the shared encoder's IB on FW9.40, with the submission path as the only
 changed variable.
 
+## Step AQ: a clean pixel acceptance through the AGC submission path
+
+One push with the row stride corrected - the colour surface's hardware row
+stride is 256 bytes where a packed 32-pixel row is 128, so the readback was
+reading every other row - and the acceptance the payload reports on its own
+target is exact:
+
+```
+openagc-agc-report: color_va=0000000200044000 submit=1 gate=1795 ib=538
+  completed=0 pixels=64 outside=0 guard=0 value=ff0040ff wait=30s match=1
+openagc-agc-target: nonzero=64 expected=64 bbox=8,8..15,15 first=ff0040ff
+openagc-agc-cb: 02000440 00000000 00000000 00028028 00000000 0007c01f 01000000 0000000f 0000000f
+```
+
+* 64 dwords written, **every one** the pinned fragment shader's
+  `0xff0040ff`;
+* the drawn window is exactly the viewport rectangle `(8,8)..(15,15)`;
+* nothing written outside it (`outside=0`) and nothing outside the target
+  (`guard=0`);
+* the nine colour-bind registers read back from the live context hold the
+  words the shared encoder composed, so the bind is provably the one that
+  rendered;
+* the submission is the AGC driver's (`sceAgcDriverSubmitDcb` plus
+  `sceAgcSuspendPoint`); the raw ioctl path has never produced a fragment.
+
+The one caveat is unchanged and does not affect the pixels: the shared EOP
+marker is not delivered on this submission path (`completed=0`), so a
+caller completing on a marker would time out. The acceptance above reads
+the target's contents instead.
+
+**Qualification.** With this evidence the rasterizer pin is raised:
+`OPENAGC_RASTER_GPU_QUALIFIED` is **1**, `openagc_raster_get_capabilities`
+reports `gpu_rasterization=1`, and the PS5 qualification record for
+`0x9400008` now includes `OPENAGC_PS5_CAP_DRAW` with the marker caveat
+written into it. Artifact: `draw_agc_eop.elf`
+(`a1c359c56c296e10b24aee313ce08fe45b0fbcb96b515b2613a0ffbcaa00a76f`),
+one push, klog attached, no fault or hang marker, loader still serving
+afterwards.
+
+**What this does not claim.** Per-plan `gpu_executable` stays 0: the
+frontends still record plans rather than submitting their own draws, and
+the AGC submission lives in the payload. Wiring `vkCmdDraw` and
+`glDrawArrays` onto the shared encoder, with the host CPU paths as the
+fallback, is the next stage-5 step, and this evidence is what makes it
+worth doing.
+
 ## What the two public PS5 drivers do that this submission does not
 
 Reviewed on 2026-09-26 against PS5_Vulkan (`mihawk-99/PS5_Vulkan`, `main`:

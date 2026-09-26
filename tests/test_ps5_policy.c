@@ -34,18 +34,17 @@ static int test_policy_qualification(void)
           (OPENAGC_PS5_CAP_COPY_EOP | OPENAGC_PS5_CAP_WRITE_DATA_FILL |
            OPENAGC_PS5_CAP_COMPUTE_STORE | OPENAGC_PS5_CAP_REGISTER_PROGRAM |
            OPENAGC_PS5_CAP_CB_BIND_READBACK | OPENAGC_PS5_CAP_IB_DUMP |
-           OPENAGC_PS5_CAP_NGG_PROGRAM));
-    CHECK((info.capability_mask & OPENAGC_PS5_CAP_DRAW) == 0u);
-    CHECK(info.refused_mask == OPENAGC_PS5_CAP_DRAW);
+           OPENAGC_PS5_CAP_NGG_PROGRAM | OPENAGC_PS5_CAP_DRAW));
+    CHECK((info.capability_mask & OPENAGC_PS5_CAP_DRAW) != 0u);
+    CHECK(info.refused_mask == 0u);
 
     CHECK(openagc_ps5_policy_require(OPENAGC_PS5_POLICY_FW940_ID,
                                      OPENAGC_PS5_CAP_COPY_EOP) == OPENAGC_OK);
     CHECK(openagc_ps5_policy_require(OPENAGC_PS5_POLICY_FW940_ID,
                                      OPENAGC_PS5_CAP_NGG_PROGRAM) == OPENAGC_OK);
-    /* A draw has no evidence on this firmware yet. */
+    /* The AGC-submitted raster draw has console evidence. */
     CHECK(openagc_ps5_policy_require(OPENAGC_PS5_POLICY_FW940_ID,
-                                     OPENAGC_PS5_CAP_DRAW) ==
-          OPENAGC_ERROR_UNSUPPORTED_OPERATION);
+                                     OPENAGC_PS5_CAP_DRAW) == OPENAGC_OK);
     CHECK(openagc_ps5_policy_require(0u, OPENAGC_PS5_CAP_COPY_EOP) ==
           OPENAGC_ERROR_UNSUPPORTED_FIRMWARE);
     CHECK(openagc_ps5_policy_require(0x9400009u, OPENAGC_PS5_CAP_COPY_EOP) ==

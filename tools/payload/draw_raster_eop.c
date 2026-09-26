@@ -46,6 +46,9 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/time.h>
+#if OPENAGC_AGC_SUBMIT
+#include <dlfcn.h>
+#endif
 
 extern int sceKernelAllocateMainDirectMemory(size_t len, size_t alignment,
                                              int memory_type, off_t *physical);
@@ -86,6 +89,9 @@ extern int sceKernelMapNamedDirectMemory(void **address, size_t len,
 #endif
 #define OPENAGC_VIEW_WORDS (OPENAGC_VIEW_W * OPENAGC_VIEW_H)
 #define OPENAGC_EOP_SEQUENCE 1u
+#ifndef OPENAGC_AGC_SUBMIT
+#define OPENAGC_AGC_SUBMIT 0
+#endif
 #ifndef OPENAGC_POINT_DRAW
 #define OPENAGC_POINT_DRAW 0
 #endif
@@ -112,6 +118,15 @@ struct openagc_cb {
     uint64_t header;
     uint64_t ib_base;
 };
+
+#if OPENAGC_AGC_SUBMIT
+struct openagc_agc_description {
+    void *words;
+    uint32_t word_count;
+    uint8_t flag;
+    uint8_t padding[3];
+};
+#endif
 
 static const char openagc_log_path[] =
     "/data/prosperoai/openagc-ib-dump-draw-ring.log";
@@ -162,11 +177,12 @@ static int openagc_write_draw_dump(int completed, uint64_t color_va,
 
     n = snprintf(buffer, sizeof(buffer),
                  "openagc-draw-raster-owned: color_va=%016llx rect=%u,%u,%ux%u "
-                 "pixels=%u outside=%u guard=%u value=%08x gate=%u wait=%ds "
+                 "pixels=%u outside=%u guard=%u value=%08x gate=%u submit=%u wait=%ds "
                  "match=%d\n",
                  (unsigned long long)color_va, OPENAGC_VIEW_X, OPENAGC_VIEW_Y,
                  OPENAGC_VIEW_W, OPENAGC_VIEW_H, pixels, outside, guard, value,
-                 (unsigned)OPENAGC_GATE_MASK, wait_seconds, match);
+                 (unsigned)OPENAGC_GATE_MASK, (unsigned)OPENAGC_AGC_SUBMIT,
+                 wait_seconds, match);
     if (n < 0 || (size_t)n >= sizeof(buffer)) {
         return -1;
     }
@@ -284,7 +300,7 @@ int main(void)
     uint32_t guard = 0u;
     uint32_t value = 0u;
     uint32_t i;
-    int gc_fd;
+    int gc_fd = -1;
     int completed = 0;
     int match = 0;
     off_t physical = 0;
@@ -441,6 +457,61 @@ int main(void)
     }
     memcpy(ib, words, word_count * 4u);
 
+#if OPENAGC_AGC_SUBMIT
+    {
+        void *agc_module = dlopen("libSceAgc.sprx", RTLD_NOW | RTLD_LOCAL);
+        void *driver_module = dlopen("libSceAgcDriver.sprx", RTLD_NOW | RTLD_LOCAL);
+        int32_t (*agc_init)(uint32_t);
+        int32_t (*submit_dcb)(void *);
+        int32_t (*suspend_point)(void);
+        struct openagc_agc_description description;
+        int32_t rc;
+
+        if (agc_module == NULL || driver_module == NULL) {
+            return openagc_logf("openagc-draw-raster: agc module missing\n") == 0
+                       ? 0
+                       : 1;
+        }
+        *(void **)(&agc_init) = dlsym(agc_module, "sceAgcInit");
+        *(void **)(&submit_dcb) = dlsym(driver_module, "sceAgcDriverSubmitDcb");
+        *(void **)(&suspend_point) = dlsym(driver_module, "sceAgcSuspendPoint");
+        if (agc_init == NULL || submit_dcb == NULL || suspend_point == NULL) {
+            return openagc_logf("openagc-draw-raster: agc symbols missing\n") == 0
+                       ? 0
+                       : 1;
+        }
+        rc = agc_init(8u);
+        if (rc != 0) {
+            return openagc_logf("openagc-draw-raster: agc init refused rc=%d\n",
+                                rc) == 0
+                       ? 0
+                       : 1;
+        }
+        description.words = ib;
+        description.word_count = word_count;
+        description.flag = 0u;
+        description.padding[0] = 0u;
+        description.padding[1] = 0u;
+        description.padding[2] = 0u;
+        gettimeofday(&start, NULL);
+        rc = submit_dcb(&description);
+        if (rc != 0) {
+            return openagc_logf(
+                       "openagc-draw-raster: agc submit refused rc=%d\n",
+                       rc) == 0
+                       ? 0
+                       : 1;
+        }
+        (void)submit;
+        (void)ib_va;
+        (void)cb_va;
+        rc = suspend_point();
+        if (rc != 0) {
+            (void)openagc_logf("openagc-draw-raster: agc suspend refused rc=%d\n",
+                               rc);
+        }
+    }
+#else
     cb[0].header = ((uint64_t)ib_va << 32) | 0xC0023F00u;
     cb[0].ib_base = ((uint64_t)word_count << 32) | ((uint64_t)ib_va >> 32);
 
@@ -478,6 +549,7 @@ int main(void)
                        : 1;
         }
     }
+#endif
 
     while (openagc_elapsed_seconds(&start) < OPENAGC_DEADLINE_SECONDS) {
         if (*marker == (uint64_t)OPENAGC_EOP_SEQUENCE) {
@@ -486,7 +558,9 @@ int main(void)
         }
         usleep(1000);
     }
-    close(gc_fd);
+    if (gc_fd >= 0) {
+        close(gc_fd);
+    }
 
     if (openagc_pm4_draw_point_scan((const uint32_t *)(const void *)color,
                                     OPENAGC_COLOR_WIDTH, OPENAGC_COLOR_HEIGHT,

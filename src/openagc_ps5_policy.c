@@ -4381,7 +4381,7 @@ openagc_result openagc_ps5_policy_qualification(uint32_t firmware_id,
     }
     info->firmware_id = firmware_id;
     info->capability_mask = 0u;
-    info->refused_mask = OPENAGC_PS5_CAP_DRAW;
+    info->refused_mask = 0u;
     if (firmware_id != OPENAGC_PS5_POLICY_FW940_ID) {
         info->qualified = 0u;
         info->refused_mask = OPENAGC_PS5_CAP_KNOWN_MASK;
@@ -4389,6 +4389,7 @@ openagc_result openagc_ps5_policy_qualification(uint32_t firmware_id,
     }
     info->qualified = 1u;
     info->capability_mask = OPENAGC_PS5_QUALIFIED_MASK;
+    info->refused_mask = OPENAGC_PS5_CAP_KNOWN_MASK & ~OPENAGC_PS5_QUALIFIED_MASK;
     return OPENAGC_OK;
 }
 

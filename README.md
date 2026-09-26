@@ -25,7 +25,7 @@ identity.
 | Vulkan / OpenGL | Shared frontend core; equivalent work lands on the same backend bytes |
 | GPU rasterizer | `openagc_raster_encode_draw` (shared, host-locked): composes the AGC-shaped draw IB — scalar state, context/uconfig tables, ES/PS program, color bind, one draw |
 | Attribute-less draws | Bind + draw recorded; still `NOT_READY` (no CB/DRAW / no `gpu_executable`) |
-| First console DRAW | The AGC-shaped IB retires on FW9.40 but writes no pixel (Steps AE-AH: either colour bind, either draw initiator). With viewport transform on, the NGG draw stops retiring (Steps AJ-AM). Step AN corrected the `VGT_ESGS_RING_ITEMSIZE` register address, wrote and read its captured value 1, and used `CB_NORMAL`; it still timed out with zero pixels. A later source audit found that Steps AF and AN left the optional fragment-gate mask unset; the corrected payload has only offline validation. The legacy draw retires without a pixel while its topology readback stays zero. |
+| First console DRAW | **Proven (Step AQ)**: the AGC-submitted raster draw writes exactly the pinned pixel shader's colour into the caller's target - 64 pixels, the viewport rectangle, empty guard. Earlier steps: the AGC-shaped IB retires on FW9.40 but writes no pixel (Steps AE-AH: either colour bind, either draw initiator). With viewport transform on, the NGG draw stops retiring (Steps AJ-AM). Step AN corrected the `VGT_ESGS_RING_ITEMSIZE` register address, wrote and read its captured value 1, and used `CB_NORMAL`; it still timed out with zero pixels. A later source audit found that Steps AF and AN left the optional fragment-gate mask unset; the corrected payload has only offline validation. The legacy draw retires without a pixel while its topology readback stays zero. |
 | Draws / general dispatch | Refused (`NOT_READY` from compiler gate) |
 | Presentation / swapchain | Native GPU swapchain refused; experimental CPU VideoOut presenter added for QuickJS |
 | `compiler_verified` / `gpu_executable` | Always **0** on accepted plans today |
@@ -36,7 +36,7 @@ identity.
 | --- | --- |
 | Same public symbols | Every public symbol is defined; host entry points stay fail-closed |
 | Qualification record | `openagc_ps5_policy_qualification` / `openagc_ps5_policy_require` state what the one observed firmware (`0x9400008`) qualified: copy+EOP, WRITE_DATA fills, compute stores, register programs, CB readback, IB dumps, the NGG program |
-| Draws | Named `OPENAGC_PS5_CAP_DRAW` and still refused: no console run has produced a pixel |
+| Draws | `OPENAGC_PS5_CAP_DRAW` qualified for `0x9400008`: the AGC-submitted raster draw writes the pinned shader's colour (the shared EOP marker is not delivered on that path, so completion reads the target) |
 | Full host GPU library | Must **not** be linked into a PS5 image; the command recorder is built separately for the VideoOut presenter |
 
 An unknown firmware identity is not qualified: the table answers

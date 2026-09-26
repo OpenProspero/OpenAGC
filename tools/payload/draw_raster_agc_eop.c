@@ -68,6 +68,7 @@ extern int sceKernelMapNamedDirectMemory(void **address, size_t len,
 #define OPENAGC_NGG_PROBE_OFF 0x1200u
 #define OPENAGC_CONTEXT_TABLE_OFF 0x1400u
 #define OPENAGC_UCONFIG_TABLE_OFF 0x1a00u
+#define OPENAGC_CB_PROBE_OFF 0x1b00u
 #define OPENAGC_IB_OFF 0x2000u
 #define OPENAGC_CB_OFF 0x3000u
 #define OPENAGC_IB_BYTES (OPENAGC_CB_OFF - OPENAGC_IB_OFF)
@@ -79,6 +80,9 @@ extern int sceKernelMapNamedDirectMemory(void **address, size_t len,
 #define OPENAGC_COLOR_OFF 0x4000u
 #define OPENAGC_COLOR_WIDTH 32u
 #define OPENAGC_COLOR_HEIGHT 32u
+/* The colour surface's row stride: 256 bytes, twice the 32-pixel row. */
+#define OPENAGC_COLOR_PITCH 256u
+#define OPENAGC_COLOR_STRIDE_WORDS (OPENAGC_COLOR_PITCH / 4u)
 #ifndef OPENAGC_VIEW_X
 #define OPENAGC_VIEW_X 8u
 #endif
@@ -177,7 +181,8 @@ static int openagc_write_report(int completed, uint64_t color_va,
                                 uint32_t bbox_max_x, uint32_t bbox_max_y,
                                 uint32_t target_first, const uint32_t *target_rows,
                                 const uint32_t *baseline, const uint32_t *probe,
-                                const uint32_t *ngg, const uint32_t *window)
+                                const uint32_t *ngg, const uint32_t *cb_probe,
+                                uint32_t marker_value, const uint32_t *window)
 {
     char buffer[OPENAGC_LOG_BYTES];
     size_t used = 0u;
@@ -250,6 +255,20 @@ static int openagc_write_report(int completed, uint64_t color_va,
     used += (size_t)n;
     for (i = 0u; i < OPENAGC_PM4_NGG_PROBE_COUNT; ++i) {
         n = snprintf(buffer + used, sizeof(buffer) - used, " %08x", ngg[i]);
+        if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+            return -1;
+        }
+        used += (size_t)n;
+    }
+
+    n = snprintf(buffer + used, sizeof(buffer) - used,
+                 "\nopenagc-agc-cb: marker=%u", marker_value);
+    if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
+        return -1;
+    }
+    used += (size_t)n;
+    for (i = 0u; i < OPENAGC_GFX10_CB_BIND_COUNT; ++i) {
+        n = snprintf(buffer + used, sizeof(buffer) - used, " %08x", cb_probe[i]);
         if (n < 0 || (size_t)n >= sizeof(buffer) - used) {
             return -1;
         }
@@ -422,13 +441,14 @@ int main(void)
     uint32_t *ngg = NULL;
     uint32_t *context_table = NULL;
     uint32_t *uconfig_table = NULL;
+    uint32_t *cb_probe = NULL;
     struct openagc_cb *cb = NULL;
     volatile uint64_t *marker = NULL;
     struct openagc_submit submit;
     struct timeval start;
     uint64_t ib_va, cb_va, color_va, marker_va, vert_code_va, frag_code_va;
     uint64_t baseline_va, probe_va, ngg_probe_va;
-    uint64_t context_table_va, uconfig_table_va;
+    uint64_t context_table_va, uconfig_table_va, cb_probe_va;
     openagc_pm4_ngg_program program;
     openagc_raster_gpu_draw draw;
     uint32_t gs_out;
@@ -486,6 +506,7 @@ int main(void)
     ngg = (uint32_t *)(arena + OPENAGC_NGG_PROBE_OFF);
     context_table = (uint32_t *)(arena + OPENAGC_CONTEXT_TABLE_OFF);
     uconfig_table = (uint32_t *)(arena + OPENAGC_UCONFIG_TABLE_OFF);
+    cb_probe = (uint32_t *)(arena + OPENAGC_CB_PROBE_OFF);
     cb = (struct openagc_cb *)(arena + OPENAGC_CB_OFF);
     marker = (volatile uint64_t *)(arena + OPENAGC_MARKER_OFF);
     color = arena + OPENAGC_COLOR_OFF;
@@ -498,6 +519,7 @@ int main(void)
     ngg_probe_va = (uint64_t)(uintptr_t)ngg;
     context_table_va = (uint64_t)(uintptr_t)context_table;
     uconfig_table_va = (uint64_t)(uintptr_t)uconfig_table;
+    cb_probe_va = (uint64_t)(uintptr_t)cb_probe;
     vert_code_va = (uint64_t)(uintptr_t)(arena + OPENAGC_VERT_CODE_OFF);
     frag_code_va = (uint64_t)(uintptr_t)(arena + OPENAGC_FRAG_CODE_OFF);
 
@@ -561,7 +583,7 @@ int main(void)
     draw.color_va = color_va;
     draw.color_width = OPENAGC_COLOR_WIDTH;
     draw.color_height = OPENAGC_COLOR_HEIGHT;
-    draw.color_pitch_bytes = 128u;
+    draw.color_pitch_bytes = OPENAGC_COLOR_WIDTH * 4u;
     draw.color_bgra = 0u;
     draw.viewport_x = OPENAGC_VIEW_X;
     draw.viewport_y = OPENAGC_VIEW_Y;
@@ -588,6 +610,7 @@ int main(void)
     draw.context_table = context_table;
     draw.uconfig_table_va = uconfig_table_va;
     draw.uconfig_table = uconfig_table;
+    draw.cb_probe_va = cb_probe_va;
     draw.gate_mask = OPENAGC_GATE_MASK;
     draw.sequence = OPENAGC_EOP_SEQUENCE;
     draw.marker_va = marker_va;
@@ -725,16 +748,39 @@ int main(void)
         close(gc_fd);
     }
 
-    if (openagc_pm4_draw_point_scan((const uint32_t *)(const void *)color,
-                                    OPENAGC_COLOR_WIDTH, OPENAGC_COLOR_HEIGHT,
-                                    OPENAGC_VIEW_X, OPENAGC_VIEW_Y,
-                                    OPENAGC_VIEW_W, OPENAGC_VIEW_H, window,
-                                    OPENAGC_VIEW_WORDS, &pixels, &outside,
-                                    &value) == 0u) {
-        return openagc_logf("openagc-draw-raster: scan refused\n") == 0 ? 0 : 1;
+    {
+        const uint32_t *target = (const uint32_t *)(const void *)color;
+        uint32_t x;
+        uint32_t y;
+
+        pixels = 0u;
+        outside = 0u;
+        value = 0u;
+        for (y = 0u; y < OPENAGC_COLOR_HEIGHT; ++y) {
+            for (x = 0u; x < OPENAGC_COLOR_WIDTH; ++x) {
+                uint32_t word = target[y * OPENAGC_COLOR_STRIDE_WORDS + x];
+                uint32_t in_window = (x >= OPENAGC_VIEW_X && x < OPENAGC_VIEW_X + OPENAGC_VIEW_W &&
+                                      y >= OPENAGC_VIEW_Y && y < OPENAGC_VIEW_Y + OPENAGC_VIEW_H);
+
+                if (in_window) {
+                    window[(y - OPENAGC_VIEW_Y) * OPENAGC_VIEW_W + (x - OPENAGC_VIEW_X)] = word;
+                }
+                if (word == 0u) {
+                    continue;
+                }
+                if (in_window) {
+                    ++pixels;
+                    if (value == 0u) {
+                        value = word;
+                    }
+                } else {
+                    ++outside;
+                }
+            }
+        }
     }
-    for (i = (OPENAGC_COLOR_OFF + OPENAGC_COLOR_WIDTH * OPENAGC_COLOR_HEIGHT *
-                                       4u) / 4u;
+    for (i = (OPENAGC_COLOR_OFF +
+              OPENAGC_COLOR_STRIDE_WORDS * OPENAGC_COLOR_HEIGHT * 4u) / 4u;
          i < OPENAGC_ARENA / 4u; ++i) {
         if (((const uint32_t *)(const void *)arena)[i] != 0u) {
             ++guard;
@@ -752,7 +798,9 @@ int main(void)
         target_min_y = 0xffffffffu;
         target_max_y = 0u;
         for (i = 0u; i < OPENAGC_COLOR_WIDTH * OPENAGC_COLOR_HEIGHT; ++i) {
-            uint32_t word = target[i];
+            uint32_t word =
+                target[(i / OPENAGC_COLOR_WIDTH) * OPENAGC_COLOR_STRIDE_WORDS +
+                       (i % OPENAGC_COLOR_WIDTH)];
 
             if (word == 0u) {
                 continue;
@@ -775,7 +823,7 @@ int main(void)
             uint32_t x;
 
             for (x = 0u; x < OPENAGC_COLOR_WIDTH; ++x) {
-                if (target[i * OPENAGC_COLOR_WIDTH + x] != 0u) {
+                if (target[i * OPENAGC_COLOR_STRIDE_WORDS + x] != 0u) {
                     mask |= 1u << x;
                 }
             }
@@ -804,7 +852,9 @@ int main(void)
         uint32_t first_value = 0u;
 
         for (i = 0u; i < OPENAGC_COLOR_WIDTH * OPENAGC_COLOR_HEIGHT; ++i) {
-            uint32_t word = target[i];
+            uint32_t word =
+                target[(i / OPENAGC_COLOR_WIDTH) * OPENAGC_COLOR_STRIDE_WORDS +
+                       (i % OPENAGC_COLOR_WIDTH)];
 
             if (word == 0u) {
                 continue;
@@ -827,7 +877,7 @@ int main(void)
             uint32_t x;
 
             for (x = 0u; x < OPENAGC_COLOR_WIDTH; ++x) {
-                if (target[i * OPENAGC_COLOR_WIDTH + x] != 0u) {
+                if (target[i * OPENAGC_COLOR_STRIDE_WORDS + x] != 0u) {
                     mask |= 1u << x;
                 }
             }
@@ -850,7 +900,7 @@ int main(void)
             openagc_elapsed_seconds(&start), match, word_count, draw.topology,
             gs_out, target_nonzero, target_expected, target_min_x, target_min_y,
             target_max_x, target_max_y, target_first, target_rows, baseline,
-            probe, ngg, window) != 0) {
+            probe, ngg, cb_probe, (uint32_t)*marker, window) != 0) {
         return 1;
     }
     return match ? 0 : 1;

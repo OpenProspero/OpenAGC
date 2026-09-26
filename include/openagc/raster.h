@@ -32,9 +32,11 @@ extern "C" {
  * GPU; nothing here rasterizes on the host, and nothing here writes
  * image bytes.
  *
- * Qualification: gpu_rasterization stays 0 until a console run proves
- * a pixel. OPENAGC_RASTER_GPU_QUALIFIED is that pin; it is only raised
- * with a reviewed hardware-evidence entry, never by a host test.
+ * Qualification: OPENAGC_RASTER_GPU_QUALIFIED is raised only by a reviewed
+ * console run that writes the pixel shader's colour into the target it was
+ * given. Step AQ is that run: 64 dwords, every one the pinned fragment
+ * shader's export, the drawn window exactly the viewport rectangle and an
+ * empty guard scan. A host test never raises it.
  *
  * The state program is the one the public native runtime builds
  * (src/platform/ps5_agc_native_runtime.c, release commit
@@ -47,7 +49,7 @@ extern "C" {
  * assembles, which is why it may not be written into the context table.
  */
 
-#define OPENAGC_RASTER_GPU_QUALIFIED 0u
+#define OPENAGC_RASTER_GPU_QUALIFIED 1u
 
 typedef uint32_t openagc_raster_topology;
 enum {
@@ -133,6 +135,8 @@ typedef struct openagc_raster_gpu_draw {
     uint64_t ngg_probe_va;
     uint64_t context_table_va;
     uint32_t *context_table;
+    /* Optional readback of the nine colour-bind registers, before the draw. */
+    uint64_t cb_probe_va;
     uint64_t uconfig_table_va;
     uint32_t *uconfig_table;
     /*
@@ -157,7 +161,7 @@ typedef struct openagc_raster_gpu_draw {
     { (uint32_t)sizeof(openagc_raster_gpu_draw), OPENAGC_RASTER_API_VERSION, \
       0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, \
       (const openagc_pm4_ngg_program *)0, 0u, 0u, 0u, 0u, 0u, 0u, \
-      (uint32_t *)0, 0u, (uint32_t *)0, (const uint32_t *)0, \
+      (uint32_t *)0, 0u, 0u, (uint32_t *)0, (const uint32_t *)0, \
       (const uint32_t *)0, 0u, (uint32_t)OPENAGC_RASTER_GATE_ALL, 1u, 0u, 0u }
 
 /*
@@ -716,6 +720,16 @@ static inline uint32_t openagc_raster_encode_draw(const openagc_raster_gpu_draw 
         cursor += openagc_pm4_encode_psbc_context_pairs(
             draw->cb_bind_offsets, draw->cb_bind_values, draw->cb_bind_count,
             words + cursor);
+    }
+
+    if (draw->cb_probe_va != 0u) {
+        for (i = 0u; i < OPENAGC_GFX10_CB_BIND_COUNT; ++i) {
+            openagc_pm4_encode_copy_data_reg_to_mem(
+                openagc_pm4_copy_data_src_context_abs(
+                    openagc_gfx10_cb_bind_offsets[i]),
+                draw->cb_probe_va + (uint64_t)i * 4u, words + cursor);
+            cursor += OPENAGC_PM4_COPY_DATA_WORDS;
+        }
     }
 
     words[cursor++] = openagc_pm4_header3(OPENAGC_PM4_OP_NUM_INSTANCES, 2u, 0u);

@@ -585,6 +585,33 @@ static int test_raster_indexed_draw(void)
     return 0;
 }
 
+static int test_raster_cb_probe(void)
+{
+    openagc_pm4_ngg_program program;
+    openagc_raster_gpu_draw draw;
+    uint32_t context_table[OPENAGC_PM4_NGG_TABLE_WORDS];
+    uint32_t uconfig_table[OPENAGC_RASTER_UCONFIG_TABLE_WORDS];
+    uint32_t words[OPENAGC_RASTER_MAX_WORDS];
+    uint32_t count;
+
+    make_program(&program);
+    make_draw(&draw, &program, context_table, uconfig_table);
+
+    draw.cb_probe_va = 0u;
+    count = openagc_raster_encode_draw(&draw, words, OPENAGC_RASTER_MAX_WORDS);
+    CHECK(count > 0u);
+    {
+        uint32_t baseline_count = count;
+
+        draw.cb_probe_va = UINT64_C(0x0000000200021b00);
+        count = openagc_raster_encode_draw(&draw, words, OPENAGC_RASTER_MAX_WORDS);
+        CHECK(count == baseline_count +
+                            OPENAGC_GFX10_CB_BIND_COUNT *
+                                OPENAGC_PM4_COPY_DATA_WORDS);
+    }
+    return 0;
+}
+
 static int test_raster_viewport_convention(void)
 {
     openagc_pm4_ngg_program program;
@@ -658,6 +685,12 @@ static int test_raster_refusals(void)
     draw.color_va = COLOR_VA + 4u;
     CHECK(openagc_raster_encode_draw(&draw, words, OPENAGC_RASTER_MAX_WORDS) == 0u);
     draw.color_va = COLOR_VA;
+
+    /* The host target stays a packed row; the hardware's padded stride is a
+     * property of the readback, not of this contract. */
+    draw.color_pitch_bytes = 256u;
+    CHECK(openagc_raster_encode_draw(&draw, words, OPENAGC_RASTER_MAX_WORDS) == 0u);
+    draw.color_pitch_bytes = 128u;
     draw.vertex_code_va = VERTEX_CODE_VA + 4u;
     CHECK(openagc_raster_encode_draw(&draw, words, OPENAGC_RASTER_MAX_WORDS) == 0u);
     draw.vertex_code_va = VERTEX_CODE_VA;
@@ -763,9 +796,10 @@ static int test_raster_capabilities(void)
 
     EXPECT(openagc_raster_get_capabilities(&capabilities), OPENAGC_OK);
     CHECK(capabilities.pm4_draw_encoding == 1u);
-    /* No console run has produced a pixel yet: the pin is the gate. */
+    /* Step AQ's console run writes the pinned shader's colour; the pin is
+     * that evidence and nothing else. */
     CHECK(capabilities.gpu_rasterization == OPENAGC_RASTER_GPU_QUALIFIED);
-    CHECK(OPENAGC_RASTER_GPU_QUALIFIED == 0u);
+    CHECK(OPENAGC_RASTER_GPU_QUALIFIED == 1u);
     CHECK(capabilities.host_rasterization == 0u);
     CHECK(capabilities.evidence_pin_count == 0u);
     CHECK(capabilities.topology_write_forms == 3u);
@@ -784,6 +818,7 @@ int main(void)
         test_raster_native_ring_variant() != 0 ||
         test_raster_indexed_draw() != 0 ||
         test_raster_viewport_convention() != 0 ||
+        test_raster_cb_probe() != 0 ||
         test_raster_explicit_bind_and_pass() != 0 ||
         test_raster_refusals() != 0 ||
         test_raster_init_macro() != 0 ||

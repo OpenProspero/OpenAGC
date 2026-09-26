@@ -42,9 +42,11 @@ enum {
      * readbacks. It completed and wrote no pixel. */
     OPENAGC_PS5_CAP_NGG_PROGRAM = 64u,
     /*
-     * A draw that lands a pixel. No console run has produced one, so this
-     * capability is never set by the table below; it is named so the
-     * refusal is explicit rather than a missing bit.
+     * A draw that lands a pixel: the AGC-submitted raster draw that writes
+     * the pinned pixel shader's colour into the caller's target (Step AQ).
+     * The shared EOP marker is not delivered on that submission path, so a
+     * caller must accept the target's contents, not a marker, as the
+     * completion signal.
      */
     OPENAGC_PS5_CAP_DRAW = 128u
 };
@@ -61,7 +63,7 @@ enum {
     (OPENAGC_PS5_CAP_COPY_EOP | OPENAGC_PS5_CAP_WRITE_DATA_FILL |              \
      OPENAGC_PS5_CAP_COMPUTE_STORE | OPENAGC_PS5_CAP_REGISTER_PROGRAM |        \
      OPENAGC_PS5_CAP_CB_BIND_READBACK | OPENAGC_PS5_CAP_IB_DUMP |              \
-     OPENAGC_PS5_CAP_NGG_PROGRAM)
+     OPENAGC_PS5_CAP_NGG_PROGRAM | OPENAGC_PS5_CAP_DRAW)
 
 typedef struct openagc_ps5_qualification {
     uint32_t struct_size;
